@@ -1,0 +1,136 @@
+#!/usr/bin/python3
+
+import subprocess, os, json, sys, tempfile
+
+def queryCommand(command):
+    with tempfile.TemporaryFile() as tempf:
+        proc = subprocess.Popen(command, stdout=tempf)
+        proc.wait()
+        tempf.seek(0)
+        return str(tempf.read())[2:-3].split("\\n")
+    
+def get_directory(dir):
+    if os.path.exists(dir) == False: return None
+    return os.listdir(dir)
+
+def get_packages_flatpak():
+    if subprocess.call(['which', 'flatpak']) != 0: return None
+    packages_flatpak = queryCommand(["flatpak", "list", "--columns=origin,installation,ref"])
+    tempData = {}
+    for i in range(len(packages_flatpak)):
+        packages_flatpak[i] = packages_flatpak[i].split("\\t")
+        if (packages_flatpak[i][0] in tempData) == False: tempData[packages_flatpak[i][0]] = {}
+        if (packages_flatpak[i][1] in tempData[packages_flatpak[i][0]]) == False: tempData[packages_flatpak[i][0]][packages_flatpak[i][1]] = []
+        tempData[packages_flatpak[i][0]][packages_flatpak[i][1]].append(packages_flatpak[i][2])
+    return tempData
+
+def get_remotes_flatpak():
+    if subprocess.call(['which', 'flatpak']) != 0: return None
+    remotes_flatpak = queryCommand(["flatpak", "remotes", "--columns=name,options,url"])
+    for i in range(len(remotes_flatpak)):
+        remotes_flatpak[i] = remotes_flatpak[i].split("\\t")
+        remotes_flatpak[i] = {'name': remotes_flatpak[i][0], 'options': remotes_flatpak[i][1], 'url': remotes_flatpak[i][2]}
+    return remotes_flatpak
+
+def get_packages_yay():
+    if subprocess.call(['which', 'yay']) != 0: return None
+    packages_yay = queryCommand(["yay", "-Qqm"])
+    return packages_yay
+
+def get_packages_pacman(aur_list):
+    if subprocess.call(['which', 'yay']) != 0: return None
+    packages_pacman = queryCommand(["pacman", "-Qqe"])
+    if aur_list is not None: packages_pacman = [x for x in packages_pacman if x not in aur_list]
+    return packages_pacman
+
+def get_packages_snap():
+    if subprocess.call(['which', 'snap']) != 0: return None
+    packages_snap = queryCommand(["snap", "list"])
+    for i in range(len(packages_snap)):
+        packages_snap[i] = packages_snap[i].split(" ")
+        temp = []
+        for a in range(len(packages_snap[i])):
+            if (packages_snap[i][a] != ""): temp.append(packages_snap[i][a])
+        packages_snap[i] = temp
+    packages_snap.pop(0)
+    return packages_snap
+
+def get_bashrc():
+    with open(os.path.expanduser("~/.bashrc"), "r") as f: return f.read().split("\n")
+
+def make_template(name):
+    data = {"before_custom_commands": [], "after_custom_commands": [], "packages": {"system": {}}, "bash_rc": "", "directories": {"home": {}, "root": {}}}
+    data['packages']['flatpak'] = get_packages_flatpak()
+    data['packages']['system']['yay'] = get_packages_yay()
+    data['packages']['system']['pacman'] = get_packages_pacman(data['packages']['system']['yay'])
+    data['packages']['snap'] = get_packages_snap()
+    #data['remotes']['flatpak'] = get_remotes_flatpak()
+    data['directories']['home']['.config'] = get_directory(os.path.expanduser("~/.config"))
+    data['directories']['home']['.mozilla'] = get_directory(os.path.expanduser("~/.mozilla"))
+    data['directories']['home']['.icons'] = get_directory(os.path.expanduser("~/.icons"))
+    data['directories']['home']['.local/share/icons'] = get_directory(os.path.expanduser("~/.local/share/icons"))
+    data['directories']['home']['.themes'] = get_directory(os.path.expanduser("~/.icons"))
+    data['directories']['home']['.local/share/themes'] = get_directory(os.path.expanduser("~/.local/share/themes"))
+    data['directories']['home']['.local/share/gnome-shell/extensions'] = get_directory(os.path.expanduser("~/.local/share/gnome-shell/extensions"))
+    data['after_custom_commands'].append("echo Test custom_commands")
+    data['bash_rc'] = True
+    with open(name, "w+") as f: f.write(json.dumps(data, indent=3))
+
+def make_kit(template):
+    directories = []
+    for directory in template['directories']['home'].keys():
+        if template['directories']['home'][directory] is not None:
+            for subdirectory in template['directories']['home'][directory]:
+                directories.append(os.path.join(os.path.expanduser("~"), directory, subdirectory))
+    for directory in template['directories']['root'].keys():
+        if template['directories']['root'][directory] is not None:
+            for subdirectory in template['directories']['root'][directory]:
+                directories.append(os.path.join(os.path.expanduser("/"), directory, subdirectory))
+    if template["bash_rc"]: template["bash_rc"] = get_bashrc()
+    else: template["bash_rc"] = None
+    del template["directories"]
+    with open(f"data.json", "w+") as f: f.write(json.dumps(template, indent=3))
+    queryCommand(["zip", "-r", "-e", "kit.zip", "data.json", *directories])
+    queryCommand(["rm", "-f", "data.json"])
+
+def restore_kit(kit_file):
+    queryCommand(["unzip", kit_file, "-d", "kit"])
+    data = None
+    with open("kit/data.json", "r") as f: data = json.loads(f.read())
+    if data is None:
+        print("Error: Couldn't open data.json on kit")
+        sys.exit(1)
+    for command in data["before_custom_commands"]: os.system(command)
+    if os.path.exists("kit/home"):
+        users_on_folder = os.listdir("kit/home")
+        if (len(users_on_folder) == 1) and users_on_folder[0] != os.getlogin(): queryCommand(["mv", f"kit/home/{users_on_folder[0]}", f"kit/home/{os.getlogin()}"])
+        for item in os.listdir(f"kit/home/{os.getlogin()}"):
+            queryCommand(["mv", f"kit/home/{os.getlogin()}/{item}", os.path.expanduser("~")])
+    if os.path.exists("kit/root"):
+        queryCommand(["sudo", "mv", "-v", "kit/root/*", "/"])
+    if data["bash_rc"] is not None:
+        with open(os.path.expanduser("~/.bash_rc"), "w") as f: f.write("\n".join(data["bash_rc"]))
+    if "yay" in data["packages"]["system"]:
+        os.system("yay -S --needed " + " ".join(data["packages"]["system"]["yay"]))
+    if "pacman" in data["packages"]["system"]:
+        os.system("sudo pacman -S --needed " + " ".join(data["packages"]["system"]["pacman"]))
+    if "flatpak" in data["packages"]:
+        for remote in data["packages"]["flatpak"]:
+            for options in data["packages"]["flatpak"][remote]:
+                os.system(f"flatpak install --noninteractive -y {remote} --{options} {' '.join(data['packages']['flatpak'][remote][options])}")
+    for command in data["after_custom_commands"]: os.system(command)
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3: sys.exit(1)
+    if sys.argv[1] == "make" and sys.argv[2] == "template":
+        if len(sys.argv) > 3: make_template(sys.argv[3])
+        else: make_template("template.json")
+    elif sys.argv[1] == "make" and sys.argv[2] == "kit":
+        if len(sys.argv) > 3:
+            with open(sys.argv[3], "r") as f: make_kit(json.loads(f.read()))
+        else:
+            with open("template.json", "r") as f: make_kit(json.loads(f.read()))
+    elif sys.argv[1] == "restore" and sys.argv[2] == "kit":
+        if len(sys.argv) > 3: restore_kit(sys.argv[3])
+        else: restore_kit("kit.zip")
+    
