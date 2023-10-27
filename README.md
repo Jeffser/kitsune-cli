@@ -25,7 +25,8 @@ To restore a kit on another computer, use the following command:
 **Important:** When restoring a kit, all specified packages will be installed without a warning. Additionally, all files will be moved, potentially replacing existing ones. Please use caution when restoring a kit.
 
 This tool is currently in development and intended for testing purposes. If you would like to contribute to its development, your help is appreciated.
-Future
+
+# Future
 
 Our future plans for Kitsune-CLI involve creating a graphical user interface (Kitsune-GUI), potentially using technologies like GTK-4 or Qt. This GUI will provide a user-friendly experience and offer more options for managing kits.
 
